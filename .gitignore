@@ -1,0 +1,33 @@
+# ROS catkin workspace outputs
+build/
+devel/
+install/
+logs/
+.catkin_tools/
+.ros/
+
+# CMake generated files (including third-party in-source builds)
+build-*/
+build_*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# Compiler and linker outputs
+*.o
+*.o.d
+*.obj
+*.a
+*.la
+*.lo
+*.so
+*.so.*
+
+# Python caches and editor metadata
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
