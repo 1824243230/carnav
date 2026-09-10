@@ -25,7 +25,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 catkin_package(
   INCLUDE_DIRS include ${EIGEN3_INCLUDE_DIR}
-  CATKIN_DEPENDS roscpp nodelet car_msgs std_msgs
+  CATKIN_DEPENDS roscpp nodelet car_msgs bspline pluginlib std_msgs tf
   DEPENDS EIGEN3
 )
 

@@ -23,7 +23,9 @@ find_package(catkin REQUIRED COMPONENTS
   common_srvs
   std_msgs
 )
-catkin_package()
+catkin_package(
+  CATKIN_DEPENDS roscpp tf nav_msgs common_srvs std_msgs
+)
 
 include_directories(include)
 include_directories(
@@ -31,6 +33,10 @@ include_directories(
 )
 
 add_executable(waypoint_generator src/waypoint_generator.cpp)
+
+add_dependencies(waypoint_generator
+  ${catkin_EXPORTED_TARGETS}
+)
 
 target_link_libraries(waypoint_generator
    ${catkin_LIBRARIES}

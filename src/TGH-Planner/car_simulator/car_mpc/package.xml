@@ -12,6 +12,8 @@
   <depend>roscpp</depend>
   <depend>nodelet</depend>
   <depend>car_msgs</depend>
+  <depend>bspline</depend>
+  <depend>pluginlib</depend>
   <depend>std_msgs</depend>
   <depend>tf</depend>
   <export>
