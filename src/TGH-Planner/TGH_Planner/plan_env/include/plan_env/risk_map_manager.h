@@ -64,6 +64,7 @@ class RiskMapManager {
 
   double getRisk(const Eigen::Vector2d& position) const;
   double getRisk(int x, int y) const;
+  double getCorridorWidth(const Eigen::Vector2d& position) const;
   double getCorridorWidth(int x, int y) const;
   std::vector<double> getRiskMap() const;
   std::vector<double> getCorridorWidthMap() const;

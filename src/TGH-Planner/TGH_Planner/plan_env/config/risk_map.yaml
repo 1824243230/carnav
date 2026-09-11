@@ -4,3 +4,20 @@ risk_map:
   lambda_corridor: 1.0
   lambda_unknown: 1.0
   robot_width: 0.5
+
+risk_aware_graph:
+  alpha: 1.0
+  beta: 1.0
+  # gamma=0 keeps J(path)=alpha*L+beta*R exactly; increase it to penalize turns.
+  gamma: 0.0
+  edge_sample_resolution: 0.1
+
+risk_aware_path_selector:
+  # Cost = w1 * normalized_length - w2 * normalized_risk (larger is better).
+  w1: 1.0
+  w2: 1.0
+  high_risk_threshold: 5.0
+  open_space_width_threshold: 2.0
+  dynamic_weight_gain: 0.0
+  orientation_tie_threshold: 0.01
+  sample_resolution: 0.1

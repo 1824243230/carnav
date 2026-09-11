@@ -36,6 +36,8 @@
 #include <nav_msgs/Path.h>
 #include "path_searching/dubins.h"
 #include "path_searching/astar_2D.h"
+#include "path_searching/risk_aware_edge.h"
+#include "path_searching/risk_aware_path_selector.h"
 #include "threadPool.h"
 
 
@@ -45,16 +47,33 @@ class TopoPath {
 public:
   std::vector<Eigen::Vector3d> path;
   double length = std::numeric_limits<double>::max();
+  double risk = 0.0;
+  double curvature_cost = 0.0;
+  double total_cost = std::numeric_limits<double>::max();
+  std::vector<RiskEdge> risk_edges;
   bool safty = true;
   std::pair<vector<Eigen::Vector3d>, vector<Eigen::Vector3d>> path_break = {}; // first是从起点到断点的路径，second是从断点到终点的路径
   bool selected = false; // 是否是当前正被选中作为引导路径的，path container里面只允许一个true
 public:
   TopoPath(const std::vector<Eigen::Vector3d>& path_, double length_)
-      : path(path_), length(length_){}
+      : path(path_), length(length_), total_cost(length_) {}
+  TopoPath(const std::vector<Eigen::Vector3d>& path_, const RiskPathCost& cost)
+      : path(path_),
+        length(cost.length),
+        risk(cost.risk),
+        curvature_cost(cost.curvature_cost),
+        total_cost(cost.total_cost),
+        risk_edges(cost.edges) {}
   TopoPath(){}
   bool operator<(const TopoPath& other) const {
-    return this->length < other.length;
+    return this->total_cost < other.total_cost;
   }
+};
+
+struct TopologicalPathCost {
+  double length = 0.0;
+  double risk = 0.0;
+  double total_cost = std::numeric_limits<double>::infinity();
 };
 
 struct RecordData {
@@ -185,7 +204,7 @@ private:
   double max_sample_time_;
   int max_sample_num_;
   int max_raw_path_;  // DFS搜索的最大路径
-  int max_raw_path2_; // 按节点对DFS路径按节点数量排序，选前max_raw_path2_个
+  int max_raw_path2_; // 按风险感知总成本排序，保留前max_raw_path2_个DFS路径
   int short_cut_num_;
   Eigen::Vector3d sample_inflate_;
   double resolution_;
@@ -194,6 +213,8 @@ private:
   int reserve_num_;
 
   bool parallel_shortcut_;
+  RiskAwareEdge::Ptr risk_aware_edge_;
+  RiskAwarePathSelector::Ptr risk_aware_path_selector_;
 
   /* create topological roadmap */
   /* path searching, shortening, pruning and merging */
@@ -231,6 +252,9 @@ private:
   Eigen::Vector3d getOrthoPoint(const vector<Eigen::Vector3d>& path);
 
   int shortestPath(vector<vector<Eigen::Vector3d>>& paths);
+  RiskPathCost evaluatePathCost(const vector<Eigen::Vector3d>& path) const;
+  void updatePathCost(TopoPath& path);
+  void logPathCosts() const;
 
   //QHB: For 2D
   bool only2D_ = true;
@@ -318,6 +342,7 @@ public:
   vector<Eigen::Vector3d> findDubinsShots(const Eigen::Vector3d& start_state, const double& radius);
   vector<Eigen::Vector3d> findGuidePath(const Eigen::Vector3d& start_state, vector<Eigen::Vector3d>& path_pts_sprase);
   vector<vector<Eigen::Vector3d>> getPathContainer(const int& label = 0);
+  vector<TopologicalPathCost> getPathCosts(const int& label = 0) const;
   void preprocess();
   Eigen::Vector3d generateWayPoint(const std::vector<Eigen::Vector3d>& guide_path, Eigen::Vector3d robot_pos);
   void checkPathContainerObstacle();

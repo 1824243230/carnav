@@ -76,7 +76,7 @@ void loadPointsFromFile(std::vector<Eigen::Vector3d>& points, const std::string&
 
 bool isNonDecreasing(const std::vector<fast_planner::TopoPath>& path_container) {
   for (size_t i = 1; i < path_container.size(); ++i) {
-      if (path_container[i].length < path_container[i - 1].length) {
+      if (path_container[i].total_cost < path_container[i - 1].total_cost) {
           return false; // 找到降序的元素，直接返回 false
       }
   }
@@ -129,6 +129,11 @@ void TopologyPRM::init(ros::NodeHandle& nh) {
   astar2D_path_finder_->setParam(nh);
   astar2D_path_finder_->setEnvironment(edt_environment_);
   astar2D_path_finder_->init();
+  risk_aware_edge_.reset(new RiskAwareEdge());
+  risk_aware_edge_->init(nh, edt_environment_->sdf_map_->getRiskMapManager(), resolution_);
+  risk_aware_path_selector_.reset(new RiskAwarePathSelector());
+  risk_aware_path_selector_->init(
+      nh, edt_environment_->sdf_map_->getRiskMapManager(), resolution_);
   ROS_WARN("----Topo path finder init!------");
 }
 
@@ -174,6 +179,11 @@ void TopologyPRM::initForTest(ros::NodeHandle& nh) {
   astar2D_path_finder_.reset(new Astar2D);
   astar2D_path_finder_->setParam(nh);
   astar2D_path_finder_->setEnvironment(edt_environment_);
+  risk_aware_edge_.reset(new RiskAwareEdge());
+  risk_aware_edge_->init(nh, edt_environment_->sdf_map_->getRiskMapManager(), resolution_);
+  risk_aware_path_selector_.reset(new RiskAwarePathSelector());
+  risk_aware_path_selector_->init(
+      nh, edt_environment_->sdf_map_->getRiskMapManager(), resolution_);
   ROS_WARN("----Topo path finder init!------");
 }
 
@@ -539,7 +549,7 @@ bool TopologyPRM::needConnection(GraphNode::Ptr g1, GraphNode::Ptr g2, Eigen::Ve
         bool same_topo = sameTopoPath(path1, path2, 0.0);
         if (same_topo) {
           // get shorter connection ?
-          if (pathLength(path1) < pathLength(path2)) {
+          if (evaluatePathCost(path1).total_cost < evaluatePathCost(path2).total_cost) {
             g1->neighbors_[i]->pos_ = pt;
             // ROS_WARN("shorter!");
           }
@@ -704,9 +714,20 @@ vector<vector<Eigen::Vector3d>> TopologyPRM::pruneEquivalent(const vector<vector
   /* ---------- prune topo equivalent path ---------- */
   // output: pruned_paths
   vector<int> exist_paths_id;
+  vector<std::pair<int, double>> scored_candidates;
+  scored_candidates.reserve(paths.size());
+  for (size_t index = 0; index < paths.size(); ++index) {
+    scored_candidates.emplace_back(static_cast<int>(index),
+                                   evaluatePathCost(paths[index]).total_cost);
+  }
+  std::sort(scored_candidates.begin(), scored_candidates.end(),
+            [](const std::pair<int, double>& lhs, const std::pair<int, double>& rhs) {
+              return lhs.second < rhs.second;
+            });
   // exist_paths_id.push_back(0);
 
-  for (int i = 0; i < paths.size(); ++i) {
+  for (const auto& scored_candidate : scored_candidates) {
+    const int i = scored_candidate.first;
     // compare with exsit paths
     bool new_path = true;
     for(const auto& exist_path : path_container_front_)
@@ -760,17 +781,17 @@ vector<vector<Eigen::Vector3d>> TopologyPRM::selectShortPaths(vector<vector<Eige
   /* ---------- only reserve top short path ---------- */
   vector<vector<Eigen::Vector3d>> short_paths;
   vector<Eigen::Vector3d> short_path;
-  double min_len;
+  double min_cost;
 
   // 这里还不如直接把全部都算出来，然后排序呢
   for (int i = 0; i < reserve_num_ && paths.size() > 0; ++i) {
     int path_id = shortestPath(paths);
     if (i == 0) {
       short_paths.push_back(paths[path_id]);
-      min_len = pathLength(paths[path_id]);
+      min_cost = evaluatePathCost(paths[path_id]).total_cost;
       paths.erase(paths.begin() + path_id);
     } else {
-      double rat = pathLength(paths[path_id]) / min_len;
+      double rat = evaluatePathCost(paths[path_id]).total_cost / min_cost;
       if (rat < ratio_to_short_) {
         short_paths.push_back(paths[path_id]);
         paths.erase(paths.begin() + path_id);
@@ -804,16 +825,22 @@ void TopologyPRM::selectShortPathsV2(const vector<vector<Eigen::Vector3d>>& path
   // move是从first开始移动依次移动（从左到右），最后first到达result;
   // move_backward是从last-1开始依次移动（从右到坐），最后last到达result;
 
-  double minLength = std::numeric_limits<double>::max();
-  int new_insert_path_count = 0;
+  vector<TopoPath> candidates;
+  candidates.reserve(paths.size());
   for (const auto& path : paths) {
-    double path_length = pathLength(path);
-    TopoPath newPath(path, path_length);
-    if(!path_container_front_.empty()) minLength = path_container_front_.front().length;
+    candidates.emplace_back(path, evaluatePathCost(path));
+  }
+  std::sort(candidates.begin(), candidates.end());
+
+  double minCost = std::numeric_limits<double>::max();
+  int new_insert_path_count = 0;
+  for (const auto& newPath : candidates) {
+    if(!path_container_front_.empty()) minCost = path_container_front_.front().total_cost;
 
     // 插入到前部分
     if (path_container_front_.size() < path_container_size_half_ ||
-        (newPath.length < path_container_front_.back().length && newPath.length < minLength * ratio_to_short_)) {
+        (newPath.total_cost < path_container_front_.back().total_cost &&
+         newPath.total_cost < minCost * ratio_to_short_)) {
         auto insertPos = std::lower_bound(path_container_front_.begin(), path_container_front_.end(), newPath);
         path_container_front_.insert(insertPos, newPath);
         ++ new_insert_path_count;
@@ -825,7 +852,8 @@ void TopologyPRM::selectShortPathsV2(const vector<vector<Eigen::Vector3d>>& path
     // 插入到后部分
     // 这里对ratio_to_short的判断，有可能造成back里面没有路径，得看看会不会发生
     else if (path_container_back_.size() < path_container_size_half_ ||
-              (newPath.length > path_container_back_.front().length && newPath.length < minLength * ratio_to_short_)) {
+              (newPath.total_cost > path_container_back_.front().total_cost &&
+               newPath.total_cost < minCost * ratio_to_short_)) {
         auto insertPos = std::lower_bound(path_container_back_.begin(), path_container_back_.end(), newPath);
         path_container_back_.insert(insertPos, newPath);
 
@@ -857,7 +885,8 @@ void TopologyPRM::selectShortPathsV2(const vector<vector<Eigen::Vector3d>>& path
   for(int i = 0; i < path_container_back_.size() && path_num < total_paths; ++i, ++path_num)
   {
       record_data_.path_lengths[path_num] = path_container_back_[i].length;
-  }  
+  }
+  logPathCosts();
 }
 
 
@@ -938,15 +967,47 @@ bool TopologyPRM::sameTopoPath(const vector<Eigen::Vector3d>& path1,
 
 int TopologyPRM::shortestPath(vector<vector<Eigen::Vector3d>>& paths) {
   int short_id = -1;
-  double min_len = 100000000;
+  double min_cost = std::numeric_limits<double>::infinity();
   for (int i = 0; i < paths.size(); ++i) {
-    double len = pathLength(paths[i]);
-    if (len < min_len) {
+    const double cost = evaluatePathCost(paths[i]).total_cost;
+    if (short_id < 0 || cost < min_cost) {
       short_id = i;
-      min_len = len;
+      min_cost = cost;
     }
   }
   return short_id;
+}
+
+RiskPathCost TopologyPRM::evaluatePathCost(const vector<Eigen::Vector3d>& path) const {
+  if (risk_aware_edge_) {
+    return risk_aware_edge_->evaluatePath(path);
+  }
+
+  RiskPathCost cost;
+  cost.length = 0.0;
+  for (size_t index = 0; index + 1 < path.size(); ++index) {
+    cost.length += (path[index + 1] - path[index]).head<2>().norm();
+  }
+  cost.total_cost = cost.length;
+  return cost;
+}
+
+void TopologyPRM::updatePathCost(TopoPath& path) {
+  const RiskPathCost cost = evaluatePathCost(path.path);
+  path.length = cost.length;
+  path.risk = cost.risk;
+  path.curvature_cost = cost.curvature_cost;
+  path.total_cost = cost.total_cost;
+  path.risk_edges = cost.edges;
+}
+
+void TopologyPRM::logPathCosts() const {
+  const vector<TopologicalPathCost> costs = getPathCosts();
+  for (size_t index = 0; index < costs.size(); ++index) {
+    ROS_INFO_STREAM("[RiskTopo] path[" << index << "] {length: "
+                    << costs[index].length << ", risk: " << costs[index].risk
+                    << ", total_cost: " << costs[index].total_cost << "}");
+  }
 }
 double TopologyPRM::pathLength(const vector<Eigen::Vector3d>& path) {
   double length = 0.0;
@@ -1215,7 +1276,7 @@ Eigen::Vector3d TopologyPRM::getOrthoPoint(const vector<Eigen::Vector3d>& path) 
 }
 
 // search for useful path in the topo graph by DFS
-// 用DFS搜索出最大max_1条路径，然后按节点数量升序排列，再选出前max_2个
+// 用DFS搜索出最大max_1条路径，然后按风险感知总成本选出前max_2个。
 vector<vector<Eigen::Vector3d>> TopologyPRM::searchPaths() {
   raw_paths_.clear();
   // //XXXX  xxx
@@ -1234,27 +1295,23 @@ vector<vector<Eigen::Vector3d>> TopologyPRM::searchPaths() {
   depthFirstSearchBid(vis1, vis2, 0);
   ROS_WARN_STREAM("raw path by BiDFS: " << raw_paths_.size()); 
 
-  // sort the path by node number
-  int min_node_num = 100000, max_node_num = 1;
-  vector<vector<int>> path_list(100);
-  for (int i = 0; i < raw_paths_.size(); ++i) {
-    if (int(raw_paths_[i].size()) > max_node_num) max_node_num = raw_paths_[i].size();
-    if (int(raw_paths_[i].size()) < min_node_num) min_node_num = raw_paths_[i].size();
-    path_list[int(raw_paths_[i].size())].push_back(i);
+  vector<std::pair<double, int>> ranked_paths;
+  ranked_paths.reserve(raw_paths_.size());
+  for (size_t index = 0; index < raw_paths_.size(); ++index) {
+    ranked_paths.emplace_back(evaluatePathCost(raw_paths_[index]).total_cost,
+                              static_cast<int>(index));
   }
+  std::sort(ranked_paths.begin(), ranked_paths.end(),
+            [](const std::pair<double, int>& lhs, const std::pair<double, int>& rhs) {
+              return lhs.first < rhs.first;
+            });
 
-  // select paths with less nodes
   vector<vector<Eigen::Vector3d>> filter_raw_paths;
-  for (int i = min_node_num; i <= max_node_num; ++i) {
-    bool reach_max = false;
-    for (int j = 0; j < path_list[i].size(); ++j) {
-      filter_raw_paths.push_back(raw_paths_[path_list[i][j]]);
-      if (filter_raw_paths.size() >= max_raw_path2_) {
-        reach_max = true;
-        break;
-      }
-    }
-    if (reach_max) break;
+  const size_t reserve_count =
+      std::min(ranked_paths.size(), static_cast<size_t>(std::max(0, max_raw_path2_)));
+  filter_raw_paths.reserve(reserve_count);
+  for (size_t index = 0; index < reserve_count; ++index) {
+    filter_raw_paths.push_back(raw_paths_[ranked_paths[index].second]);
   }
   std::cout << ", raw path num: " << raw_paths_.size() << ", " << filter_raw_paths.size();
 
@@ -1702,84 +1759,52 @@ vector<Eigen::Vector3d> TopologyPRM::findDubinsShots(const Eigen::Vector3d& star
 }
 
 
-// 从path_container里面选择最短的路径，用新的评价标准 
+// Select the best_path by maximizing risk-aware utility. Orientation remains
+// the tie breaker for candidates with near-equal utility.
 vector<Eigen::Vector3d> TopologyPRM::findGuidePath(const Eigen::Vector3d& start_state, vector<Eigen::Vector3d>& path_pts_sprase) {
   if(path_container_front_.empty() && path_container_back_.empty()) return {};
-  
-  vector<vector<Eigen::Vector3d>> disected_paths;
-  for(int i = 0; i < path_container_front_.size(); ++i)
-    disected_paths.push_back(discretizePath(path_container_front_[i].path));
 
-  std::vector<double> path_lengths;
-  std::vector<double> path_angle_diffs, path_angle_penalties;
-  std::vector<double> path_sim_to_last;
-  int idx = -1;
-  for (int i = 0; i < path_container_front_.size(); ++i)
-  {
-    auto onePath = path_container_front_[i].path;
-    ++idx;
-    path_lengths.push_back(pathLength(onePath));      
-    double path_angle = std::atan2(onePath[1].y() - onePath[0].y(), onePath[1].x() - onePath[0].x());
-    double angle_diff = path_angle - start_state(2);
-    // 归一化到 [-pi, pi]
-    while (angle_diff > M_PI) angle_diff -= 2 * M_PI;
-    while (angle_diff < -M_PI) angle_diff += 2 * M_PI;
-    path_angle_diffs.emplace_back(std::abs(angle_diff));
-    path_angle_penalties.emplace_back(std::abs(1.0 - std::cos(path_angle_diffs.back())));
-    if (last_best_path_.empty()) 
-    {
-      path_sim_to_last.push_back(0.0); // 如果没有上一个最优路径，则相似度为0
-      continue;
-    }
-    // 计算与上一个最优路径的相似度
-    double sim = 0.0;
-    int check_num = std::min(std::min(disected_paths[idx].size(), last_best_path_.size()), (size_t)(10.0/resolution_));
-    for (int i = 0; i < check_num; ++i)
-    {
-      double dist = (disected_paths[idx][i] - last_best_path_[i]).norm();
-      sim += dist;
-    }
-    path_sim_to_last.push_back(sim / check_num);
+  std::vector<TopoPath*> candidates;
+  candidates.reserve(path_container_front_.size() + path_container_back_.size());
+  for (auto& candidate : path_container_front_) candidates.push_back(&candidate);
+  for (auto& candidate : path_container_back_) candidates.push_back(&candidate);
+
+  std::vector<PathSelectionCandidate> selection_candidates;
+  selection_candidates.reserve(candidates.size());
+  for (TopoPath* candidate : candidates) {
+    updatePathCost(*candidate);
+    selection_candidates.push_back(
+        {candidate->path, candidate->length, candidate->risk});
   }
 
-  int best_path_idx = 0;
-  double min_penalty = 1000000.0;
-  double w_angle = 0.1;    // 权重，控制角度惩罚和长度惩罚的比例
-  double w_sim_last = 0.5; // 权重，控制与上一个最优路径的相似度的影响
-  for (int i = 0; i < path_container_front_.size(); ++i)
-  {
-    double penalty = path_lengths[i] + 
-                      (path_angle_penalties[i]) * std::min(path_lengths[i], (10.0/resolution_)) * w_angle + 
-                      path_sim_to_last[i] * w_sim_last;
-    if (penalty < min_penalty)
-    {
-      min_penalty = penalty;
-      best_path_idx = i;
-    }
+  PathSelectionResult selection;
+  if (risk_aware_path_selector_) {
+    selection = risk_aware_path_selector_->selectBestPath(
+        selection_candidates, start_state(2));
   }
-  last_best_path_ = disected_paths[best_path_idx];
-  path_pts_sprase = path_container_front_[best_path_idx].path;
-  // 打印所有路径的得分
-  std::cout << "All path scores:" << std::endl;
-  for (int i = 0; i < path_container_front_.size(); ++i) {
-    double penalty = path_lengths[i] + 
-                    (path_angle_penalties[i]) * std::min(path_lengths[i], (10.0 / resolution_)) * w_angle + 
-                    path_sim_to_last[i] * w_sim_last;
-    // std::cout << "Path index: " << i 
-    //           << ", length: " << path_lengths[i] 
-    //           << ", angle diff: " << path_angle_diffs[i] 
-    //           << ", sim to last: " << path_sim_to_last[i] 
-    //           << ", penalty: " << penalty << std::endl;
+  if (!selection.success) {
+    ROS_WARN("RiskAwarePathSelector failed; falling back to the first topological path.");
+    selection.success = true;
+    selection.best_index = 0;
+    selection.best_path = candidates.front()->path;
   }
 
-  // 打印最佳路径的信息
-  // std::cout << "Best path index: " << best_path_idx << ", length: " 
-  //           << path_lengths[best_path_idx] << ", angle diff: " 
-  //           << path_angle_diffs[best_path_idx] << ", sim to last: " 
-  //           << path_sim_to_last[best_path_idx] << ", penalty: " << min_penalty << std::endl;
-    // 发布最优路径
-  publishGuidePath(path_container_front_[best_path_idx].path);
+  const TopoPath& best_path = *candidates[selection.best_index];
+  last_best_path_ = discretizePath(selection.best_path);
+  path_pts_sprase = selection.best_path;
+  publishGuidePath(selection.best_path);
 
+  ROS_INFO_STREAM("[RiskPathSelector] best_path {length: " << best_path.length
+                  << ", risk: " << best_path.risk
+                  << ", cost: " << selection.cost
+                  << ", normalized_length: " << selection.normalized_length
+                  << ", normalized_risk: " << selection.normalized_risk
+                  << ", w1: " << selection.w1
+                  << ", w2: " << selection.w2
+                  << ", average_risk: " << selection.average_risk
+                  << ", average_corridor_width: "
+                  << selection.average_corridor_width
+                  << ", orientation_error: " << selection.orientation_error << "}");
   return last_best_path_; // 需要返回的是稠密的路径点。
 }
 
@@ -1891,6 +1916,25 @@ vector<vector<Eigen::Vector3d>> TopologyPRM::getPathContainer(const int& label)
   }
 
   return paths;
+}
+
+vector<TopologicalPathCost> TopologyPRM::getPathCosts(const int& label) const
+{
+  vector<TopologicalPathCost> costs;
+  costs.reserve(path_container_front_.size() + path_container_back_.size());
+  auto append_costs = [&costs](const vector<TopoPath>& paths) {
+    for (const auto& path : paths) {
+      costs.push_back({path.length, path.risk, path.total_cost});
+    }
+  };
+
+  if (label == 0 || label == 1) append_costs(path_container_front_);
+  if (label == 0 || label == 2) append_costs(path_container_back_);
+  std::sort(costs.begin(), costs.end(),
+            [](const TopologicalPathCost& lhs, const TopologicalPathCost& rhs) {
+              return lhs.total_cost < rhs.total_cost;
+            });
+  return costs;
 }
 
 
@@ -2334,7 +2378,7 @@ void TopologyPRM::updateAllPaths()
     // }
     // std::cout << std::endl;
 
-    path_container_front_[i].length = pathLength(path_container_front_[i].path);
+    updatePathCost(path_container_front_[i]);
     // checkPathObstacle2(path_container_front_[i].path);
   }
   for(int i = 0; i < path_container_back_.size(); ++i)
@@ -2363,27 +2407,25 @@ void TopologyPRM::updateAllPaths()
     //         start_change_.begin(), start_change_.end());
     // publishTestPath(path_container_back_[i].path, 2);
     shortcutPath(i, false);
-    path_container_back_[i].length = pathLength(path_container_back_[i].path);
+    updatePathCost(path_container_back_[i]);
     // publishTestPath(path_container_back_[i].path, 1);
     int debug = 0;
   }
 
   // 对两个组重新排序
-  sort(path_container_front_.begin(), path_container_front_.end(),
-       [&](TopoPath& path1, TopoPath& path2) { return path1.length < path2.length; });
-  sort(path_container_back_.begin(), path_container_back_.end(),
-       [&](TopoPath& path1, TopoPath& path2) { return path1.length < path2.length; });
+  sort(path_container_front_.begin(), path_container_front_.end());
+  sort(path_container_back_.begin(), path_container_back_.end());
 
-  double minLength = std::numeric_limits<double>::max();
+  double minCost = std::numeric_limits<double>::max();
   // 如果path_container_front_都为空了，则说明整个path_container里面全部空了
   if(!path_container_front_.empty())
-    minLength = path_container_front_.front().length;
+    minCost = path_container_front_.front().total_cost;
   // else
   //   ROS_WARN("There is no path in path_container, maybe something wrong!");
   // if(path_container_front_.size() <)
   for(auto it = path_container_front_.begin(); it != path_container_front_.end(); )
   {
-    if(it->length >= ratio_to_short_ * minLength)
+    if(it->total_cost >= ratio_to_short_ * minCost)
     {
       it = path_container_front_.erase(it);   
       ROS_WARN("One path in Front erased by ratio_to_short_");   
@@ -2395,7 +2437,7 @@ void TopologyPRM::updateAllPaths()
     // 至少在path_container_back_保留一个
     for(auto it = path_container_back_.begin() + 1; it != path_container_back_.end(); )
     {
-      if(it->length >= ratio_to_short_ * minLength)
+      if(it->total_cost >= ratio_to_short_ * minCost)
         it = path_container_back_.erase(it);
       else ++it;
     }
@@ -2425,6 +2467,7 @@ void TopologyPRM::updateAllPaths()
       else ++j;
     }
   }
+  logPathCosts();
   int debug = 0;
 }
 

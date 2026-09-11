@@ -204,6 +204,20 @@ double RiskMapManager::getRisk(int x, int y) const {
   return risk_map_[toAddress(x, y, size_x_)];
 }
 
+double RiskMapManager::getCorridorWidth(const Eigen::Vector2d& position) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!ready_ || resolution_ <= 0.0) {
+    return 0.0;
+  }
+
+  const int x = static_cast<int>(std::floor((position.x() - origin_.x()) / resolution_));
+  const int y = static_cast<int>(std::floor((position.y() - origin_.y()) / resolution_));
+  if (x < 0 || x >= size_x_ || y < 0 || y >= size_y_) {
+    return 0.0;
+  }
+  return corridor_width_map_[toAddress(x, y, size_x_)];
+}
+
 double RiskMapManager::getCorridorWidth(int x, int y) const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!ready_ || x < 0 || x >= size_x_ || y < 0 || y >= size_y_) {

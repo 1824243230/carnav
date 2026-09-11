@@ -46,6 +46,8 @@ add_library( path_searching
     src/kinodynamic_astar_2D.cpp 
     src/astar.cpp
     src/astar_2D.cpp
+    src/risk_aware_edge.cpp
+    src/risk_aware_path_selector.cpp
     src/topo_prm.cpp
     src/dubins.cpp
     src/jump_point_search.cpp
