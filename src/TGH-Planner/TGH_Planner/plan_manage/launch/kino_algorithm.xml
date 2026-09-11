@@ -30,6 +30,7 @@
   <arg name="FilePath"/>
   <!-- main node -->
   <node pkg="plan_manage" name="fast_planner_node" type="fast_planner_node" output="screen">
+    <rosparam command="load" file="$(find plan_env)/config/risk_map.yaml"/>
     <remap from = "/odom_world" to="$(arg odometry_topic)"/>
     <remap from = "/sdf_map/odom" to="$(arg odometry_topic)"/>
     <remap from = "/sdf_map/perception_data" to="$(arg perception_data)"/>

@@ -275,6 +275,8 @@ void SDFMap::initMap() {
   random_device rd;
   eng_ = default_random_engine(rd());
   voronoi_layer_ = std::make_shared<DynaVoro::VoronoiLayer>(node_);
+  risk_map_manager_.reset(new fast_planner::RiskMapManager());
+  risk_map_manager_->init(node_);
 }
 // 这里一定要修改地图的分辨率，不然报错
 void SDFMap::initMapFromCostMap()
@@ -288,6 +290,8 @@ void SDFMap::initMapFromCostMap()
   click_point_sub_ = node_.subscribe<geometry_msgs::PointStamped>("/clicked_point", 10, &SDFMap::ClickpointCallback, this);
   vis_timer_ = node_.createTimer(ros::Duration(0.1), &SDFMap::visCallback, this);
   voronoi_layer_ = std::make_shared<DynaVoro::VoronoiLayer>(node_);
+  risk_map_manager_.reset(new fast_planner::RiskMapManager());
+  risk_map_manager_->init(node_);
 }
 
 void SDFMap::ClickpointCallback(const geometry_msgs::PointStampedConstPtr& click_point)
@@ -297,8 +301,10 @@ void SDFMap::ClickpointCallback(const geometry_msgs::PointStampedConstPtr& click
   bool map_updated = voronoi_layer_->update_by_occupancy_map(md_.occupancy_buffer_inflate_2D_, 
                     std::round(mp_.map_voxel_num_(0)), std::round(mp_.map_voxel_num_(1)));
   // 将voronoi_layer里面的esdf值储存给md_.distance_buffer_all_2D_
-  if(map_updated)
+  if(map_updated) {
     voronoi_layer_->getESDFMap(md_.distance_buffer_all_2D_);
+  }
+  updateRiskMap2D();
 }
 
 // 可以接受ros的cost_map，然后处理
@@ -430,8 +436,10 @@ void SDFMap::CostmapCallback(const nav_msgs::OccupancyGridConstPtr &map_msg)
   bool map_updated = voronoi_layer_->update_by_occupancy_map(md_.occupancy_buffer_inflate_2D_, 
                     std::round(mp_.map_voxel_num_(0)), std::round(mp_.map_voxel_num_(1)));
   // 将voronoi_layer里面的esdf值储存给md_.distance_buffer_all_2D_
-  if(map_updated)
+  if(map_updated) {
     voronoi_layer_->getESDFMap(md_.distance_buffer_all_2D_);
+  }
+  updateRiskMap2D();
   has_costmap_ = true;
   ROS_WARN("Costmap Callback Success!");
 }
@@ -685,6 +693,19 @@ void SDFMap::updateESDF2d() {
       if (md_.distance_buffer_neg_2D_[idx] > 0.0)
         md_.distance_buffer_all_2D_[idx] += (-md_.distance_buffer_neg_2D_[idx] + mp_.resolution_);
     }
+}
+
+void SDFMap::updateRiskMap2D() {
+  if (!risk_map_manager_ || !mp_.need_map_2D_) return;
+
+  risk_map_manager_->updateRiskMap(md_.occupancy_buffer_inflate_2D_,
+                                   md_.distance_buffer_all_2D_,
+                                   mp_.map_voxel_num_(0),
+                                   mp_.map_voxel_num_(1),
+                                   mp_.resolution_,
+                                   mp_.map_origin_.head<2>(),
+                                   mp_.frame_id_,
+                                   md_.sensor_time_);
 }
 
 
@@ -1920,8 +1941,10 @@ void SDFMap::updateOccupancyCallback(const ros::TimerEvent& /*event*/) {
     bool map_updated = voronoi_layer_->update_by_occupancy_map(md_.occupancy_buffer_inflate_2D_, 
                        std::round(mp_.map_voxel_num_(0)), std::round(mp_.map_voxel_num_(1)));
     // 将voronoi_layer里面的esdf值储存给md_.distance_buffer_all_2D_
-    if(map_updated)
+    if(map_updated) {
       voronoi_layer_->getESDFMap(md_.distance_buffer_all_2D_);
+    }
+    updateRiskMap2D();
   }
   
 

@@ -1,0 +1,6 @@
+risk_map:
+  risk_enable: true
+  lambda_distance: 1.0
+  lambda_corridor: 1.0
+  lambda_unknown: 1.0
+  robot_width: 0.5

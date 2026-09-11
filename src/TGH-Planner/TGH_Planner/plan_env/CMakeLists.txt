@@ -5,6 +5,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
+  nav_msgs
   visualization_msgs
   cv_bridge
   message_filters
@@ -20,7 +21,7 @@ message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 catkin_package(
  INCLUDE_DIRS include
  LIBRARIES plan_env
- CATKIN_DEPENDS roscpp std_msgs dynavoro
+ CATKIN_DEPENDS roscpp std_msgs nav_msgs dynavoro
 #  DEPENDS system_lib
 )
 
@@ -39,6 +40,7 @@ set(CMAKE_CXX_FLAGS "-std=c++17 ${CMAKE_CXX_FLAGS} -O3 -Wall")
 
 add_library( plan_env 
     src/sdf_map.cpp 
+    src/risk_map_manager.cpp
     src/obj_predictor.cpp 
     src/edt_environment.cpp 
     src/raycast.cpp

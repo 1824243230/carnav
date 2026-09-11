@@ -59,6 +59,7 @@
 #include <limits>
 #include <cmath>
 #include <plan_env/raycast.h>
+#include <plan_env/risk_map_manager.h>
 #include "dvr/voronoi_layer.h"
 #define logit(x) (log((x) / (1 - (x))))
 
@@ -297,6 +298,8 @@ public:
   inline double getDistance2D(const Eigen::Vector2d& pos);
   inline double getDistance2D(const Eigen::Vector3d& pos3d);
   inline double getDistance2D(const Eigen::Vector2i& id);
+  inline double getRisk2D(const Eigen::Vector2d& pos) const;
+  inline fast_planner::RiskMapManager::Ptr getRiskMapManager() const;
   
   //通过线形插值的方式，从esdf地图中计算某个double点的距离场梯度
   inline double getDistWithGradTrilinear(Eigen::Vector3d pos, Eigen::Vector3d& grad);
@@ -446,6 +449,7 @@ private:
   void publishESDF2D();
   bool pub_all_map_ = true;
   void updateESDF2d();
+  void updateRiskMap2D();
   inline void posToIndex2D(const Eigen::Vector2d& pos, Eigen::Vector2i& id);
 
   inline void boundIndex2D(Eigen::Vector2i& id);  
@@ -460,6 +464,7 @@ private:
 
   //QHB: 我将voronoi_layer也放这里了。sdf_map就不要重新计算2D esdf地图了，而是直接使用voronoi_layer的全局2D esdf地图
   std::shared_ptr<DynaVoro::VoronoiLayer> voronoi_layer_;
+  fast_planner::RiskMapManager::Ptr risk_map_manager_;
 
 
 };
@@ -532,6 +537,15 @@ inline double SDFMap::getDistance2D(const Eigen::Vector2i& id) {
   Eigen::Vector2i id1 = id;
   boundIndex2D(id1);
   return md_.distance_buffer_all_2D_[toAddress2D(id1)];
+}
+
+inline double SDFMap::getRisk2D(const Eigen::Vector2d& pos) const {
+  if (!risk_map_manager_) return std::numeric_limits<double>::infinity();
+  return risk_map_manager_->getRisk(pos);
+}
+
+inline fast_planner::RiskMapManager::Ptr SDFMap::getRiskMapManager() const {
+  return risk_map_manager_;
 }
 
 
