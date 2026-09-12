@@ -48,6 +48,7 @@ add_library( path_searching
     src/astar_2D.cpp
     src/risk_aware_edge.cpp
     src/risk_aware_path_selector.cpp
+    src/path_reliability/PathReliabilityEvaluator.cpp
     src/topo_prm.cpp
     src/dubins.cpp
     src/jump_point_search.cpp
@@ -55,3 +56,14 @@ add_library( path_searching
 target_link_libraries( path_searching
     ${catkin_LIBRARIES} 
     )  
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(path_reliability_evaluator_test
+    test/path_reliability/PathReliabilityEvaluatorTest.cpp
+    test/path_reliability/PathReliabilityRankingTest.cpp)
+  if(TARGET path_reliability_evaluator_test)
+    target_link_libraries(path_reliability_evaluator_test
+      path_searching
+      ${catkin_LIBRARIES})
+  endif()
+endif()

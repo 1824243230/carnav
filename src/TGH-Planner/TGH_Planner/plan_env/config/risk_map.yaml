@@ -21,3 +21,16 @@ risk_aware_path_selector:
   dynamic_weight_gain: 0.0
   orientation_tie_threshold: 0.01
   sample_resolution: 0.1
+
+# Path Reliability Score evaluator and final candidate-ranking weights.
+path_reliability:
+  enable: true
+  lambda_length: 1.0
+  lambda_risk: 1.0
+  lambda_prs: 1.0
+  alpha: 1.0
+  beta: 1.0
+  gamma: 1.0
+  epsilon: 0.001
+  sample_resolution: 0.1
+  debug_output: true

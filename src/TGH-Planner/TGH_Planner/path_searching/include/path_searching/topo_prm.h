@@ -38,6 +38,7 @@
 #include "path_searching/astar_2D.h"
 #include "path_searching/risk_aware_edge.h"
 #include "path_searching/risk_aware_path_selector.h"
+#include "path_reliability/PathReliabilityEvaluator.h"
 #include "threadPool.h"
 
 
@@ -215,6 +216,7 @@ private:
   bool parallel_shortcut_;
   RiskAwareEdge::Ptr risk_aware_edge_;
   RiskAwarePathSelector::Ptr risk_aware_path_selector_;
+  PathReliabilityEvaluator::Ptr path_reliability_evaluator_;
 
   /* create topological roadmap */
   /* path searching, shortening, pruning and merging */

@@ -1,10 +1,12 @@
 <launch>
-  <arg name="FilePath" value="/home/bhrqhb/catkin_TGH_new/src/TGH_Planner/"/>
+  <!-- Repository root; keep the trailing slash because planner code appends relative paths. -->
+  <arg name="FilePath" value="$(find plan_manage)/../../"/>
   
   <!-- use_teb表示mpc输出的指令是cmd_vel类型的 -->
   <arg name="Diff_Model" default="false"/>
   <arg name="B_Spline_LocalPlanner" default = "false"/>
   <arg name="sim_pose" default="false"/>
+  <arg name="start_rviz" default="true"/>
 
   <!--offset_gazebo_world用来校正gazebo的原点和本算法world坐标系的原点-->
   <!-- 在sim_pose = false时，-offset_gazebo_world_x = 小车在rviz下真正初始位置，在gazebo里面一定是原点 -->
@@ -162,7 +164,9 @@
     <arg name="odometry_topic" value="$(arg odom_topic)"/>
     <arg name="Diff_Model" value="$(arg Diff_Model)"/>
   </include>
-  <node name="rvizvisualisation" pkg="rviz" type="rviz" output="log" args="-d $(find plan_manage)/config/traj_TGH.rviz" respawn="true"/>
+  <group if="$(arg start_rviz)">
+    <node name="rvizvisualisation" pkg="rviz" type="rviz" output="log" args="-d $(find plan_manage)/config/traj_TGH.rviz" respawn="true"/>
+  </group>
 </group>
 
 <group unless="$(arg B_Spline_LocalPlanner)">
@@ -171,6 +175,8 @@
     <arg name="max_vel" value="$(arg max_vel_)"/>
     <arg name="max_acc" value="$(arg max_acc_)"/>
   </include>
-  <node name="rvizvisualisation" pkg="rviz" type="rviz" output="log" args="-d $(find plan_manage)/config/traj.rviz" respawn="true"/>
+  <group if="$(arg start_rviz)">
+    <node name="rvizvisualisation" pkg="rviz" type="rviz" output="log" args="-d $(find plan_manage)/config/traj.rviz" respawn="true"/>
+  </group>
 </group>
 </launch>

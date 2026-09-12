@@ -1,3 +1,28 @@
 <launch>
-  <node name="rvizvisualisation" pkg="rviz" type="rviz" output="log" args="-d $(find plan_manage)/config/traj.rviz" respawn="true"/>
+  <!--
+    By default, start the simulation/planning system before RViz so that the
+    interface has live vehicle, map, risk-map, and trajectory data.
+    Select top-level functions with the checkboxes in RViz's Displays panel,
+    then expand a function to edit its topic, color, opacity, and other options.
+  -->
+  <arg name="config" default="$(find plan_manage)/config/traj_TGH.rviz"/>
+  <arg name="respawn" default="false"/>
+  <arg name="with_system" default="true"/>
+  <arg name="B_Spline_LocalPlanner" default="true"/>
+  <arg name="sim_pose" default="true"/>
+
+  <group if="$(arg with_system)">
+    <include file="$(find plan_manage)/launch/kino_replan.launch">
+      <arg name="B_Spline_LocalPlanner" value="$(arg B_Spline_LocalPlanner)"/>
+      <arg name="sim_pose" value="$(arg sim_pose)"/>
+      <arg name="start_rviz" value="false"/>
+    </include>
+  </group>
+
+  <node name="rvizvisualisation"
+        pkg="rviz"
+        type="rviz"
+        output="screen"
+        args="-d $(arg config)"
+        respawn="$(arg respawn)"/>
 </launch>

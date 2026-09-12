@@ -19,6 +19,9 @@ double dynamicScale(double value, double threshold, double gain) {
 
 }  // namespace
 
+RiskAwarePathSelector::RiskAwarePathSelector(const Parameters& parameters)
+    : params_(sanitizeParameters(parameters, 0.1)) {}
+
 void RiskAwarePathSelector::init(ros::NodeHandle& nh,
                                  const RiskMapManager::Ptr& risk_map_manager,
                                  double map_resolution) {
@@ -37,17 +40,27 @@ void RiskAwarePathSelector::init(ros::NodeHandle& nh,
            params_.orientation_tie_threshold, params_.orientation_tie_threshold);
   nh.param("risk_aware_path_selector/sample_resolution",
            params_.sample_resolution, params_.sample_resolution);
+  nh.param("path_reliability/enable", params_.reliability_enabled,
+           params_.reliability_enabled);
+  nh.param("path_reliability/lambda_length", params_.lambda_length,
+           params_.lambda_length);
+  nh.param("path_reliability/lambda_risk", params_.lambda_risk,
+           params_.lambda_risk);
+  nh.param("path_reliability/lambda_prs", params_.lambda_prs,
+           params_.lambda_prs);
 
-  params_.w1 = std::max(0.0, params_.w1);
-  params_.w2 = std::max(0.0, params_.w2);
-  params_.orientation_tie_threshold = std::max(0.0, params_.orientation_tie_threshold);
-  params_.sample_resolution = std::max(params_.sample_resolution, map_resolution_);
+  params_ = sanitizeParameters(params_, map_resolution_);
 
   ROS_INFO_STREAM("RiskAwarePathSelector initialized: w1=" << params_.w1
                   << ", w2=" << params_.w2
                   << ", high_risk_threshold=" << params_.high_risk_threshold
                   << ", open_space_width_threshold="
-                  << params_.open_space_width_threshold);
+                  << params_.open_space_width_threshold
+                  << ", reliability_enabled=" << std::boolalpha
+                  << params_.reliability_enabled
+                  << ", lambda_length=" << params_.lambda_length
+                  << ", lambda_risk=" << params_.lambda_risk
+                  << ", lambda_prs=" << params_.lambda_prs);
 }
 
 PathSelectionResult RiskAwarePathSelector::selectBestPath(
@@ -95,6 +108,10 @@ PathSelectionResult RiskAwarePathSelector::selectBestPath(
   result.w2 = params_.w2 * dynamicScale(result.average_risk,
                                         params_.high_risk_threshold,
                                         params_.dynamic_weight_gain);
+  result.reliability_enabled = params_.reliability_enabled;
+  result.lambda_length = params_.lambda_length;
+  result.lambda_risk = params_.lambda_risk;
+  result.lambda_prs = params_.lambda_prs;
 
   for (std::size_t i = 0; i < candidates.size(); ++i) {
     const auto& candidate = candidates[i];
@@ -106,7 +123,15 @@ PathSelectionResult RiskAwarePathSelector::selectBestPath(
                                     ? normalizedValue(candidate.risk, min_risk,
                                                       max_risk, 0.0)
                                     : 1.0;
-    const double cost = result.w1 * length_score - result.w2 * risk_penalty;
+    const double prs_score = params_.reliability_enabled &&
+                                     std::isfinite(candidate.prs_score)
+                                 ? std::max(0.0, std::min(1.0, candidate.prs_score))
+                                 : 0.0;
+    const double cost = params_.reliability_enabled
+                            ? params_.lambda_length * length_score -
+                                  params_.lambda_risk * risk_penalty +
+                                  params_.lambda_prs * prs_score
+                            : result.w1 * length_score - result.w2 * risk_penalty;
     const double orientation_error = initialHeadingError(candidate.path, start_yaw);
 
     const bool higher_cost = !result.success ||
@@ -121,6 +146,7 @@ PathSelectionResult RiskAwarePathSelector::selectBestPath(
       result.cost = cost;
       result.normalized_length = length_score;
       result.normalized_risk = risk_penalty;
+      result.prs_score = prs_score;
       result.orientation_error = orientation_error;
     }
   }
@@ -186,6 +212,36 @@ double RiskAwarePathSelector::normalizedValue(double value,
     return equal_value;
   }
   return std::max(0.0, std::min(1.0, (value - minimum) / range));
+}
+
+RiskAwarePathSelector::Parameters RiskAwarePathSelector::sanitizeParameters(
+    const Parameters& parameters, double map_resolution) {
+  Parameters sanitized = parameters;
+  if (!std::isfinite(sanitized.w1) || sanitized.w1 < 0.0) sanitized.w1 = 1.0;
+  if (!std::isfinite(sanitized.w2) || sanitized.w2 < 0.0) sanitized.w2 = 1.0;
+  if (!std::isfinite(sanitized.lambda_length) || sanitized.lambda_length < 0.0) {
+    sanitized.lambda_length = 1.0;
+  }
+  if (!std::isfinite(sanitized.lambda_risk) || sanitized.lambda_risk < 0.0) {
+    sanitized.lambda_risk = 1.0;
+  }
+  if (!std::isfinite(sanitized.lambda_prs) || sanitized.lambda_prs < 0.0) {
+    sanitized.lambda_prs = 1.0;
+  }
+  if (!std::isfinite(sanitized.orientation_tie_threshold) ||
+      sanitized.orientation_tie_threshold < 0.0) {
+    sanitized.orientation_tie_threshold = 0.05;
+  }
+  const double valid_map_resolution =
+      std::isfinite(map_resolution) ? std::max(map_resolution, kEpsilon) : 0.1;
+  if (!std::isfinite(sanitized.sample_resolution) ||
+      sanitized.sample_resolution <= 0.0) {
+    sanitized.sample_resolution = valid_map_resolution;
+  } else {
+    sanitized.sample_resolution =
+        std::max(sanitized.sample_resolution, valid_map_resolution);
+  }
+  return sanitized;
 }
 
 }  // namespace fast_planner

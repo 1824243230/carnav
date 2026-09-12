@@ -134,6 +134,13 @@ void TopologyPRM::init(ros::NodeHandle& nh) {
   risk_aware_path_selector_.reset(new RiskAwarePathSelector());
   risk_aware_path_selector_->init(
       nh, edt_environment_->sdf_map_->getRiskMapManager(), resolution_);
+  if (risk_aware_path_selector_->getParameters().reliability_enabled) {
+    path_reliability_evaluator_.reset(new PathReliabilityEvaluator());
+    path_reliability_evaluator_->init(
+        nh, edt_environment_, edt_environment_->sdf_map_->getRiskMapManager());
+  } else {
+    path_reliability_evaluator_.reset();
+  }
   ROS_WARN("----Topo path finder init!------");
 }
 
@@ -184,6 +191,13 @@ void TopologyPRM::initForTest(ros::NodeHandle& nh) {
   risk_aware_path_selector_.reset(new RiskAwarePathSelector());
   risk_aware_path_selector_->init(
       nh, edt_environment_->sdf_map_->getRiskMapManager(), resolution_);
+  if (risk_aware_path_selector_->getParameters().reliability_enabled) {
+    path_reliability_evaluator_.reset(new PathReliabilityEvaluator());
+    path_reliability_evaluator_->init(
+        nh, edt_environment_, edt_environment_->sdf_map_->getRiskMapManager());
+  } else {
+    path_reliability_evaluator_.reset();
+  }
   ROS_WARN("----Topo path finder init!------");
 }
 
@@ -1771,10 +1785,23 @@ vector<Eigen::Vector3d> TopologyPRM::findGuidePath(const Eigen::Vector3d& start_
 
   std::vector<PathSelectionCandidate> selection_candidates;
   selection_candidates.reserve(candidates.size());
-  for (TopoPath* candidate : candidates) {
+  const bool reliability_enabled = risk_aware_path_selector_ &&
+      risk_aware_path_selector_->getParameters().reliability_enabled;
+  for (std::size_t index = 0; index < candidates.size(); ++index) {
+    TopoPath* candidate = candidates[index];
     updatePathCost(*candidate);
-    selection_candidates.push_back(
-        {candidate->path, candidate->length, candidate->risk});
+    PathSelectionCandidate selection_candidate;
+    selection_candidate.path = candidate->path;
+    selection_candidate.length = candidate->length;
+    selection_candidate.risk = candidate->risk;
+    if (reliability_enabled && path_reliability_evaluator_) {
+      PathCandidate reliability_candidate;
+      reliability_candidate.path_id = static_cast<int>(index);
+      reliability_candidate.path = candidate->path;
+      selection_candidate.prs_score =
+          path_reliability_evaluator_->evaluate(reliability_candidate).prs_score;
+    }
+    selection_candidates.push_back(std::move(selection_candidate));
   }
 
   PathSelectionResult selection;
@@ -1799,6 +1826,12 @@ vector<Eigen::Vector3d> TopologyPRM::findGuidePath(const Eigen::Vector3d& start_
                   << ", cost: " << selection.cost
                   << ", normalized_length: " << selection.normalized_length
                   << ", normalized_risk: " << selection.normalized_risk
+                  << ", prs_score: " << selection.prs_score
+                  << ", reliability_enabled: " << std::boolalpha
+                  << selection.reliability_enabled
+                  << ", lambda_length: " << selection.lambda_length
+                  << ", lambda_risk: " << selection.lambda_risk
+                  << ", lambda_prs: " << selection.lambda_prs
                   << ", w1: " << selection.w1
                   << ", w2: " << selection.w2
                   << ", average_risk: " << selection.average_risk
