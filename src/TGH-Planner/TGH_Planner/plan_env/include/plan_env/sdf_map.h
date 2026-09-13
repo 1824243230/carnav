@@ -357,6 +357,24 @@ public:
     return voronoi_layer_->getVoroPaths(ground_height_);
   }
 
+  DynaVoro::MapChangeSet getLatestMapChangeSet() const
+  {
+    return voronoi_layer_ ? voronoi_layer_->getLatestMapChangeSet()
+                          : DynaVoro::MapChangeSet();
+  }
+
+  DynaVoro::MapChangeSet getMapChangesSince(uint64_t revision) const
+  {
+    return voronoi_layer_ ? voronoi_layer_->getMapChangesSince(revision)
+                          : DynaVoro::MapChangeSet();
+  }
+
+  DynaVoro::IncrementalGraphStats getIncrementalGraphStats() const
+  {
+    return voronoi_layer_ ? voronoi_layer_->getIncrementalStats()
+                          : DynaVoro::IncrementalGraphStats();
+  }
+
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:

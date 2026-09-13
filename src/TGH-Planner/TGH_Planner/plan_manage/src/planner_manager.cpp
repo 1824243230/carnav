@@ -311,7 +311,6 @@ void FastPlannerManager::TopoPathReplan(Eigen::Vector3d start_pt, Eigen::Vector3
                              graph, raw_paths, filtered_paths, select_paths);
     // topo_prm_->findTopoPaths(start_pt_forward, end_pt, vector<Eigen::Vector3d>(), vector<Eigen::Vector3d>(), 
     //                          graph, raw_paths, filtered_paths, select_paths);
-    topo_prm_->preprocess();
     plan_data_.addTopoPaths(graph, raw_paths, topo_prm_->getPathContainer(2), topo_prm_->getPathContainer(1));
     plan_data_.voronoi_paths_ = topo_prm_->getVoroPathsForPub();
     // plan_data_.topo_guide_path_ = topo_prm_->findDubinsShots(start_pt_forward, 0.5 * kino_path_finder_->getSteerRadius());

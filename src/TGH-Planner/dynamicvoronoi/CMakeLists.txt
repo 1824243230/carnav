@@ -59,6 +59,7 @@ include_directories(
 
 add_library(dynavoro
     src/voronoi_layer.cpp
+    src/incremental_topo_graph_manager.cpp
     src/dynamicvoronoi.cpp
     src/raycast.cpp
 )   
@@ -81,4 +82,3 @@ add_executable(voronoi_planner_node
     )
 target_link_libraries(voronoi_planner_node 
     ${catkin_LIBRARIES} dynavoro)
-

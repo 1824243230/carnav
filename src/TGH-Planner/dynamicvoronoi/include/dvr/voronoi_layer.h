@@ -2,6 +2,7 @@
 #pragma once
 #define SavePathData
 #include <memory>
+#include <deque>
 
 #include <boost/thread.hpp>
 #include "costmap_2d/GenericPluginConfig.h"
@@ -10,6 +11,7 @@
 #include "costmap_2d/layered_costmap.h"
 #include "dvr/dynamicvoronoi.h"
 #include "dvr/GVG.h"
+#include "dvr/incremental_topo_graph_manager.h"
 #include "dvr/raycast.h"
 #include "nav_msgs/OccupancyGrid.h"
 #include "nav_msgs/Path.h"
@@ -174,7 +176,14 @@ class VoronoiLayer
 {
 public:
   VoronoiLayer(ros::NodeHandle& nh);
-  bool update_by_occupancy_map(const std::vector<char>& occupancy_map, int map_size_x, int map_size_y);
+  bool update_by_occupancy_map(const std::vector<char>& occupancy_map, int map_size_x, int map_size_y,
+                               int min_x = -1, int min_y = -1,
+                               int max_x = -1, int max_y = -1);
+  MapChangeSet getLatestMapChangeSet() const { return latest_map_changes_; }
+  MapChangeSet getMapChangesSince(uint64_t revision) const;
+  IncrementalGraphStats getIncrementalStats() const {
+    return graph_manager_ ? graph_manager_->stats() : IncrementalGraphStats();
+  }
 
   const DynamicVoronoi& getVoronoi() const;
   boost::mutex& getMutex();
@@ -296,6 +305,12 @@ private:
   float clearance_low_thr_, clearance_high_thr_;
   boost::mutex mutex_;
   std::shared_ptr<gvg::GVG> gvg_;
+  std::unique_ptr<IncrementalTopoGraphManager> graph_manager_;
+  MapChangeSet latest_map_changes_;
+  std::deque<MapChangeSet> map_change_history_;
+  size_t map_change_history_size_ = 64;
+  std::vector<char> last_occupancy_map_;
+  uint64_t map_revision_ = 0;
   pcl::KdTreeFLANN<pcl::PointXY> GvgNodeKdTree_;
   std::shared_ptr<gvg::Planner> gvg_planner_;
   #ifdef SavePathData

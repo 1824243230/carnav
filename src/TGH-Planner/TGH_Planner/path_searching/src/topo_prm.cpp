@@ -25,6 +25,7 @@
 
 #include <path_searching/topo_prm.h>
 #include <thread>
+#include <unordered_set>
 
 void savePointsToFile(const std::vector<Eigen::Vector3d>& points, const std::string& filename) {
     // 创建输出文件流对象
@@ -208,7 +209,8 @@ void TopologyPRM::findVoroPaths(Eigen::Vector3d start, Eigen::Vector3d end,
                                 vector<vector<Eigen::Vector3d>>& select_paths)
 {
   ros::Time t1, t2;
-  double voro_plan_time, short_time, prune_time, select_time, preprocess_time;
+  double voro_plan_time = 0.0, short_time = 0.0, prune_time = 0.0;
+  double select_time = 0.0, preprocess_time = 0.0;
   /* ---------- create the topo graph ---------- */
   t1 = ros::Time::now();
   start.z() = ground_height_;
@@ -245,6 +247,7 @@ void TopologyPRM::findVoroPaths(Eigen::Vector3d start, Eigen::Vector3d end,
   preprocess_time = (ros::Time::now() - t1).toSec();
   t1 = ros::Time::now();
   bool plan_success =  edt_environment_->sdf_map_->voro_plan(start, end);
+  if (!plan_success) ROS_WARN("[IncrementalTopo] Voronoi planner returned no path.");
   short_paths_ = edt_environment_->sdf_map_->getVoroPaths(ground_height_);
   int path_size_by_voro = short_paths_.size();
   voro_plan_time = (ros::Time::now() - t1).toSec();
@@ -276,6 +279,9 @@ void TopologyPRM::findVoroPaths(Eigen::Vector3d start, Eigen::Vector3d end,
             << ", path_size_by_voro: " << path_size_by_voro 
             << ", path_size_by_voro_prune: " << path_size_by_voro_prune
             << ", path_size_in_container_after: " << path_size_in_container_after << std::endl;
+  ROS_DEBUG_STREAM("[IncrementalTopo] HEC_check_count=" << hec_check_count_
+                   << " reused_history_paths=" << reused_history_paths_
+                   << " invalidated_history_paths=" << invalidated_history_paths_);
 }
 
 
@@ -752,6 +758,14 @@ vector<vector<Eigen::Vector3d>> TopologyPRM::pruneEquivalent(const vector<vector
         break;
       }
     }
+    if (new_path) {
+      for (const auto& exist_path : path_container_back_) {
+        if (sameTopoPath(paths[i], exist_path.path, 0.0, true)) {
+          new_path = false;
+          break;
+        }
+      }
+    }
     // 如果和现在容器里的对比，都不是new_path，则不必再和其他的对比了。
     if(!new_path) continue;
 
@@ -848,7 +862,11 @@ void TopologyPRM::selectShortPathsV2(const vector<vector<Eigen::Vector3d>>& path
 
   double minCost = std::numeric_limits<double>::max();
   int new_insert_path_count = 0;
-  for (const auto& newPath : candidates) {
+  for (auto newPath : candidates) {
+    newPath.path_id = next_path_id_++;
+    newPath.validated_map_revision =
+        edt_environment_->sdf_map_->getLatestMapChangeSet().revision;
+    newPath.state = TopoPath::VALID;
     if(!path_container_front_.empty()) minCost = path_container_front_.front().total_cost;
 
     // 插入到前部分
@@ -906,6 +924,7 @@ void TopologyPRM::selectShortPathsV2(const vector<vector<Eigen::Vector3d>>& path
 
 bool TopologyPRM::sameTopoPath(const vector<Eigen::Vector3d>& path1,
                                const vector<Eigen::Vector3d>& path2, double thresh, bool preprocess) {
+  ++hec_check_count_;
   vector<Eigen::Vector3d> newPath1, newPath2;
   if(preprocess)
   {
@@ -2056,6 +2075,14 @@ vector<Eigen::Vector3d> TopologyPRM::backtrackFromStart(const std::vector<Eigen:
 // 根据笔记内容，来对path_container进行预处理
 void TopologyPRM::preprocess()
 {
+  active_map_changes_ =
+      edt_environment_->sdf_map_->getMapChangesSince(last_processed_map_revision_);
+  reused_history_paths_ = 0;
+  invalidated_history_paths_ = 0;
+  hec_check_count_ = 0;
+  if (active_map_changes_.revision == last_processed_map_revision_ && start_change_.empty()) {
+    return;
+  }
   // ROS_WARN("Preprocess Topo Paths!");
   // 1. 检查所有路径的碰撞情况，标记碰撞的路径，并保留起点和终点连接的部分；标记碰撞区域
   checkPathContainerObstacle();
@@ -2065,18 +2092,63 @@ void TopologyPRM::preprocess()
   // 4. short所有的路径。然后丢弃ratio太大的，和已经失效的。所有路径根据short后的结果sort
   updateAllPaths();
 
+  last_processed_map_revision_ = active_map_changes_.revision;
+  ROS_DEBUG_STREAM("[IncrementalTopo] reused_history_paths=" << reused_history_paths_
+                   << " invalidated_history_paths=" << invalidated_history_paths_
+                   << " HEC_check_count=" << hec_check_count_);
+
+}
+
+bool TopologyPRM::pathIntersectsDirtyRegion(
+    const std::vector<Eigen::Vector3d>& path,
+    const DynaVoro::MapChangeSet& changes) const
+{
+  if (path.empty() || (!changes.full_map && !changes.bounds.valid())) return changes.full_map;
+  if (changes.full_map) return true;
+  const Eigen::Vector3d origin = edt_environment_->sdf_map_->getOrigin();
+  const double resolution = edt_environment_->sdf_map_->getResolution();
+  const double margin = clearance_ + resolution;
+  const double min_x = origin.x() + changes.bounds.min_x * resolution - margin;
+  const double min_y = origin.y() + changes.bounds.min_y * resolution - margin;
+  const double max_x = origin.x() + (changes.bounds.max_x + 1) * resolution + margin;
+  const double max_y = origin.y() + (changes.bounds.max_y + 1) * resolution + margin;
+  for (size_t i = 0; i < path.size(); ++i) {
+    const Eigen::Vector3d& a = path[i];
+    const Eigen::Vector3d& b = path[std::min(i + 1, path.size() - 1)];
+    if (std::max(a.x(), b.x()) >= min_x && std::min(a.x(), b.x()) <= max_x &&
+        std::max(a.y(), b.y()) >= min_y && std::min(a.y(), b.y()) <= max_y) return true;
+  }
+  return false;
 }
 
 void TopologyPRM::checkPathContainerObstacle()
 {
   for(int i = 0; i < path_container_front_.size(); ++i)
   {
-    checkPathObstacle3(i, true);
+    TopoPath& path = path_container_front_[i];
+    if (path.validated_map_revision >= active_map_changes_.revision ||
+        !pathIntersectsDirtyRegion(path.path, active_map_changes_)) {
+      path.state = TopoPath::VALID;
+      path.validated_map_revision = active_map_changes_.revision;
+      ++reused_history_paths_;
+    } else {
+      path.state = TopoPath::AFFECTED;
+      checkPathObstacle3(i, true);
+    }
   }
   // 对于远组，应该也是差不多的吧
   for(int i = 0; i < path_container_back_.size(); ++i)
   {
-    checkPathObstacle3(i, false);
+    TopoPath& path = path_container_back_[i];
+    if (path.validated_map_revision >= active_map_changes_.revision ||
+        !pathIntersectsDirtyRegion(path.path, active_map_changes_)) {
+      path.state = TopoPath::VALID;
+      path.validated_map_revision = active_map_changes_.revision;
+      ++reused_history_paths_;
+    } else {
+      path.state = TopoPath::AFFECTED;
+      checkPathObstacle3(i, false);
+    }
   }
 }
 
@@ -2182,17 +2254,34 @@ void TopologyPRM::checkPathObstacle3(const int& path_id, const bool& inFront)
 
   // 1) 先从左找第一个碰撞点 iL，再从右找第一个碰撞点 iR
   int iL = -1, iR = -1;
-  for (int i = 0; i < (int)dis_path.size(); ++i)        if (dist(i) <= dis_to_obs) { iL = i; break; }
-  for (int j = (int)dis_path.size() - 1; j >= 0; --j)   if (dist(j) <= dis_to_obs) { iR = j; break; }
+  auto in_dirty = [&](const Eigen::Vector3d& point) {
+    if (active_map_changes_.full_map || !active_map_changes_.bounds.valid()) return true;
+    Eigen::Vector3d origin = edt_environment_->sdf_map_->getOrigin();
+    const double res = edt_environment_->sdf_map_->getResolution();
+    const int margin = static_cast<int>(std::ceil(clearance_ / res)) + 1;
+    const int x = static_cast<int>(std::floor((point.x() - origin.x()) / res));
+    const int y = static_cast<int>(std::floor((point.y() - origin.y()) / res));
+    return active_map_changes_.bounds.contains(x, y, margin);
+  };
+  for (int i = 0; i < (int)dis_path.size(); ++i)
+    if (in_dirty(dis_path[i]) && dist(i) <= dis_to_obs) { iL = i; break; }
+  for (int j = (int)dis_path.size() - 1; j >= 0; --j)
+    if (in_dirty(dis_path[j]) && dist(j) <= dis_to_obs) { iR = j; break; }
 
   // 无碰撞：直接返回
   if (iL == -1 && iR == -1) {
-    // 可选：保持 safty=true
+    onePath.safty = true;
+    // Collision-free, but its homotopy relation may have changed inside the
+    // dirty region. Keep it AFFECTED until selective HEC completes.
+    onePath.state = TopoPath::AFFECTED;
+    onePath.validated_map_revision = active_map_changes_.revision;
     return;
   }
 
   // 存在碰撞
   onePath.safty = false;
+  onePath.state = TopoPath::INVALID;
+  ++invalidated_history_paths_;
 
   // 2) 向左回溯，找到左边界 L（最后一个 > dis_to_obs2 的点）
   int L = 0;
@@ -2308,6 +2397,8 @@ void TopologyPRM::reconnectBreakPath(const int& path_id, const bool& inFront)
   {
     vector<Eigen::Vector3d> connectPath = astar2D_path_finder_->getPath();
     onePath.safty = true;
+    onePath.state = TopoPath::AFFECTED;
+    ++onePath.geometry_version;
     onePath.path.resize(0);
     onePath.path.insert(onePath.path.end(), onePath.path_break.first.begin(), onePath.path_break.first.end());
     onePath.path.insert(onePath.path.end(), connectPath.begin(), connectPath.end());
@@ -2358,6 +2449,16 @@ void TopologyPRM::updateAllPaths()
   // findDubinsShots里完成【要将这个在远组的前面的路径给删除，用于确保近组->远组是非降序的】
   // (4)只检查近组的同伦。在后续正常采样时，也只和近组的相比较同伦，远组的不用。这里，我就对近组和远组进行了区分
   // (5)后面新添加的时候，也不能大于ratio_to_short
+  std::unordered_set<uint64_t> hec_dirty_path_ids;
+  for (const auto& path : path_container_front_)
+    if (path.state != TopoPath::VALID) hec_dirty_path_ids.insert(path.path_id);
+  for (const auto& path : path_container_back_)
+    if (path.state != TopoPath::VALID) hec_dirty_path_ids.insert(path.path_id);
+  if (!start_change_.empty()) {
+    for (const auto& path : path_container_front_) hec_dirty_path_ids.insert(path.path_id);
+    for (const auto& path : path_container_back_) hec_dirty_path_ids.insert(path.path_id);
+  }
+
   path_container_front_.erase(std::remove_if(path_container_front_.begin(), path_container_front_.end(),
                               [](const TopoPath& path){
                                 return !path.safty;
@@ -2401,7 +2502,9 @@ void TopologyPRM::updateAllPaths()
     // }
     // std::cout << std::endl;
     // std::cout << "----------------------" << std::endl;
-    shortcutPath(i, true);
+    const bool geometry_dirty = !start_change_.empty() ||
+                                path_container_front_[i].state != TopoPath::VALID;
+    if (geometry_dirty) shortcutPath(i, true);
     
     // int size_after = path_container_front_[i].path.size();
     // ROS_WARN_STREAM("Path " << i << " in Front shorted from " << size_before 
@@ -2411,7 +2514,7 @@ void TopologyPRM::updateAllPaths()
     // }
     // std::cout << std::endl;
 
-    updatePathCost(path_container_front_[i]);
+    if (geometry_dirty) updatePathCost(path_container_front_[i]);
     // checkPathObstacle2(path_container_front_[i].path);
   }
   for(int i = 0; i < path_container_back_.size(); ++i)
@@ -2439,8 +2542,12 @@ void TopologyPRM::updateAllPaths()
     // path_container_back_[i].path.insert(path_container_back_[i].path.begin(), 
     //         start_change_.begin(), start_change_.end());
     // publishTestPath(path_container_back_[i].path, 2);
-    shortcutPath(i, false);
-    updatePathCost(path_container_back_[i]);
+    const bool geometry_dirty = !start_change_.empty() ||
+                                path_container_back_[i].state != TopoPath::VALID;
+    if (geometry_dirty) {
+      shortcutPath(i, false);
+      updatePathCost(path_container_back_[i]);
+    }
     // publishTestPath(path_container_back_[i].path, 1);
     int debug = 0;
   }
@@ -2480,6 +2587,11 @@ void TopologyPRM::updateAllPaths()
   {
     for(int j = i + 1; j < path_container_front_.size();)
     {
+      if (hec_dirty_path_ids.count(path_container_front_[i].path_id) == 0 &&
+          hec_dirty_path_ids.count(path_container_front_[j].path_id) == 0) {
+        ++j;
+        continue;
+      }
       bool same = sameTopoPath(path_container_front_[i].path, path_container_front_[j].path, 0.0, true);
       if(same)
       {
@@ -2492,6 +2604,11 @@ void TopologyPRM::updateAllPaths()
   {
     for(int j = i + 1; j < path_container_back_.size();)
     {
+      if (hec_dirty_path_ids.count(path_container_back_[i].path_id) == 0 &&
+          hec_dirty_path_ids.count(path_container_back_[j].path_id) == 0) {
+        ++j;
+        continue;
+      }
       bool same = sameTopoPath(path_container_back_[i].path, path_container_back_[j].path, 0.0, true);
       if(same)
       {
@@ -2499,6 +2616,31 @@ void TopologyPRM::updateAllPaths()
       }
       else ++j;
     }
+  }
+  // Front/back are ranking groups, not distinct topology domains. Compare
+  // across them only when one side was affected in this cycle.
+  for (int i = 0; i < path_container_front_.size(); ++i) {
+    for (int j = 0; j < path_container_back_.size();) {
+      if (hec_dirty_path_ids.count(path_container_front_[i].path_id) == 0 &&
+          hec_dirty_path_ids.count(path_container_back_[j].path_id) == 0) {
+        ++j;
+        continue;
+      }
+      if (sameTopoPath(path_container_front_[i].path,
+                       path_container_back_[j].path, 0.0, true)) {
+        path_container_back_.erase(path_container_back_.begin() + j);
+      } else {
+        ++j;
+      }
+    }
+  }
+  for (auto& path : path_container_front_) {
+    path.state = TopoPath::VALID;
+    path.validated_map_revision = active_map_changes_.revision;
+  }
+  for (auto& path : path_container_back_) {
+    path.state = TopoPath::VALID;
+    path.validated_map_revision = active_map_changes_.revision;
   }
   logPathCosts();
   int debug = 0;

@@ -1939,7 +1939,9 @@ void SDFMap::updateOccupancyCallback(const ros::TimerEvent& /*event*/) {
   if (md_.local_updated_)
   {
     bool map_updated = voronoi_layer_->update_by_occupancy_map(md_.occupancy_buffer_inflate_2D_, 
-                       std::round(mp_.map_voxel_num_(0)), std::round(mp_.map_voxel_num_(1)));
+                       std::round(mp_.map_voxel_num_(0)), std::round(mp_.map_voxel_num_(1)),
+                       md_.local_bound_min_.x(), md_.local_bound_min_.y(),
+                       md_.local_bound_max_.x(), md_.local_bound_max_.y());
     // 将voronoi_layer里面的esdf值储存给md_.distance_buffer_all_2D_
     if(map_updated) {
       voronoi_layer_->getESDFMap(md_.distance_buffer_all_2D_);

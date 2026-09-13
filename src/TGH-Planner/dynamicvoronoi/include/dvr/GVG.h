@@ -250,7 +250,13 @@ struct ExpansionResult {
 class GVG {
 public:
     // 创建图
-    void createGraph(const DynamicVoronoi& voronoi) {
+    // Run the original GVG pipeline on a rectangular map region.  The default
+    // arguments preserve the former full-map behaviour.  A regional build is
+    // intentionally performed on an otherwise empty scratch GVG; callers add
+    // a halo and merge the resulting patch transactionally.
+    void createGraph(const DynamicVoronoi& voronoi, int region_min_x = 0,
+                     int region_min_y = 0, int region_max_x = -1,
+                     int region_max_y = -1) {
         SimpleTimer timer;
         // Simple
         // DynaVoro::SimpleTimer timer;
@@ -272,9 +278,15 @@ public:
             sizeY_ = voronoi.getSizeY();
             std::cout << "[GVG] Init!" << std::endl;
         }
-        // std::fill(grid_types_.begin(), grid_types_.end(), GRID_TYPE::None);
-        // std::fill(grid_adjs_.begin(), grid_adjs_.end(), (uint8_t)0);
-        // std::fill(voronoi_new.begin(), voronoi_new.end(), false);
+        std::fill(grid_types_.begin(), grid_types_.end(), GRID_TYPE::None);
+        std::fill(grid_adjs_.begin(), grid_adjs_.end(), (uint8_t)0);
+        std::fill(voronoi_new.begin(), voronoi_new.end(), false);
+        const int x_begin = std::max(0, region_min_x);
+        const int y_begin = std::max(0, region_min_y);
+        const int x_end = region_max_x < 0 ? sizeX_ : std::min(sizeX_, region_max_x + 1);
+        const int y_end = region_max_y < 0 ? sizeY_ : std::min(sizeY_, region_max_y + 1);
+        const bool regional_build = x_begin > 0 || y_begin > 0 || x_end < sizeX_ || y_end < sizeY_;
+        if (x_begin >= x_end || y_begin >= y_end) return;
         truncated_points_.clear();
         completeCoonction_points_.clear();
         #ifdef VERBOSE
@@ -292,8 +304,8 @@ public:
 
         // Step 1: 遍历所有点，从原始的voronoi里判断是否为Voronoi点；
         std::vector<IntPoint> strong_grid_vec;
-        for (int x = 0; x < sizeX_; ++x) {
-            for (int y = 0; y < sizeY_; ++y) {        
+        for (int x = x_begin; x < x_end; ++x) {
+            for (int y = y_begin; y < y_end; ++y) {
                 if (voronoi.isVoronoiWithDisThr(x, y, cle_thr_sq_low_)) {
                     voronoi_new[y * sizeX_ + x] = true;  // 标记为已voronoi点
                 }
@@ -308,8 +320,8 @@ public:
         timer.reset();
         #endif
         // Step 2: 对于每个Voronoi点，判断其邻接关系，分类为强节点、弱节点、边，然后进行一次GVG化；
-        for (int x = 0; x < sizeX_; ++x) {
-            for (int y = 0; y < sizeY_; ++y) {        
+        for (int x = x_begin; x < x_end; ++x) {
+            for (int y = y_begin; y < y_end; ++y) {
                 if (!voronoi_new[y * sizeX_ + x]) {
                     continue;  // 跳过非维诺图点
                 }
@@ -490,8 +502,8 @@ public:
         // Step 5：将等高线加入到voronoi_new上，并补全连接；// 把下面的注释，就是不添加等高线。
     if (use_EGVG_){
         std::queue<IntPoint> voronoi_pt_queue;
-        for (int x = 0; x < sizeX_; ++x) {
-            for (int y = 0; y < sizeY_; ++y) {        
+        for (int x = x_begin; x < x_end; ++x) {
+            for (int y = y_begin; y < y_end; ++y) {
                 float dis_sq = voronoi.getDistanceSq(x, y);
                 if (voronoi_new[y * sizeX_ + x] == true) {
                     if (x >= 2 && x < sizeX_ - 2 && y >= 2 && y < sizeY_ - 2) {
@@ -540,8 +552,8 @@ public:
         timer.reset();
         #endif
 
-        for (int x = 0; x < sizeX_; ++x) {
-          for (int y = 0; y < sizeY_; ++y) {        
+        for (int x = x_begin; x < x_end; ++x) {
+          for (int y = y_begin; y < y_end; ++y) {
                 if (!voronoi_new[y * sizeX_ + x]) {
                     continue;  // 跳过非维诺图点
                 }
@@ -693,9 +705,13 @@ public:
             {
                 auto node_ptr = node.second;
                 int x = node_ptr->pos.x, y = node_ptr->pos.y;
-                if (node_ptr->type == GRID_TYPE::Strong)
+                if (node_ptr->type == GraphNode::Strong)
                     voronoi_new[y * sizeX_ + x] = true;
-                if (node_ptr->type == GRID_TYPE::Weak && node_ptr->neighbor_paths[0].path_length > 50)
+                const bool patch_anchor = regional_build &&
+                    (x <= x_begin + 1 || x >= x_end - 2 ||
+                     y <= y_begin + 1 || y >= y_end - 2);
+                if (node_ptr->type == GraphNode::Weak && !node_ptr->neighbor_paths.empty() &&
+                    (node_ptr->neighbor_paths[0].path_length > 50 || patch_anchor))
                 {
                     // 如果是弱节点，但是路径长度大于200，则认为是强节点
                     node_ptr->type = GraphNode::Strong;  // 将其标记为强节点
@@ -765,6 +781,64 @@ public:
     void set_use_EGVG(bool use_egvg)
     {
         use_EGVG_ = use_egvg;
+    }
+
+    void copyConfigurationTo(GVG& target) const {
+        target.setClearanceThresholdSq(cle_thr_sq_low_, cle_thr_sq_high_);
+        target.set_use_EGVG(use_EGVG_);
+    }
+
+    // A changed skeleton reaching the patch boundary means the ROI did not
+    // contain the topological effect of the map update and must be enlarged.
+    bool regionBoundaryMatches(const GVG& patch, int min_x, int min_y,
+                               int max_x, int max_y, int ring = 1) const {
+        if (sizeX_ != patch.sizeX_ || sizeY_ != patch.sizeY_ ||
+            voronoi_new.size() != patch.voronoi_new.size()) return false;
+        min_x = std::max(0, min_x);
+        min_y = std::max(0, min_y);
+        max_x = std::min(sizeX_ - 1, max_x);
+        max_y = std::min(sizeY_ - 1, max_y);
+        ring = std::max(1, ring);
+        for (int x = min_x; x <= max_x; ++x) {
+            for (int y = min_y; y <= max_y; ++y) {
+                const bool boundary = x < min_x + ring || x > max_x - ring ||
+                                      y < min_y + ring || y > max_y - ring;
+                if (boundary && voronoi_new[y * sizeX_ + x] !=
+                                    patch.voronoi_new[y * sizeX_ + x]) return false;
+            }
+        }
+        return true;
+    }
+
+    // Commit both the graph and its raster cache only after the manager has
+    // validated a complete replacement graph.
+    void commitRegionalGraph(
+        std::vector<std::unordered_map<IntPoint, GraphNode::Ptr>>&& graphs,
+        const GVG& patch, int min_x, int min_y, int max_x, int max_y) {
+        graphs_ = std::move(graphs);
+        min_x = std::max(0, min_x);
+        min_y = std::max(0, min_y);
+        max_x = std::min(sizeX_ - 1, max_x);
+        max_y = std::min(sizeY_ - 1, max_y);
+        for (int x = min_x; x <= max_x; ++x) {
+            for (int y = min_y; y <= max_y; ++y) {
+                const size_t idx = static_cast<size_t>(y * sizeX_ + x);
+                voronoi_new[idx] = patch.voronoi_new[idx];
+                grid_types_[idx] = patch.grid_types_[idx];
+                grid_adjs_[idx] = patch.grid_adjs_[idx];
+            }
+        }
+        auto in_region = [=](const IntPoint& p) {
+            return p.x >= min_x && p.x <= max_x && p.y >= min_y && p.y <= max_y;
+        };
+        truncated_points_.erase(
+            std::remove_if(truncated_points_.begin(), truncated_points_.end(), in_region),
+            truncated_points_.end());
+        completeCoonction_points_.erase(
+            std::remove_if(completeCoonction_points_.begin(), completeCoonction_points_.end(), in_region),
+            completeCoonction_points_.end());
+        for (const auto& p : patch.truncated_points_) if (in_region(p)) truncated_points_.push_back(p);
+        for (const auto& p : patch.completeCoonction_points_) if (in_region(p)) completeCoonction_points_.push_back(p);
     }
 
     void getStrongNodes(std::vector<IntPoint>& strong_nodes) const {

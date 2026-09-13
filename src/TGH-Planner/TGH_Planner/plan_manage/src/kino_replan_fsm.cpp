@@ -380,6 +380,8 @@ void KinoReplanFSM::checkCollisionCallback(const ros::TimerEvent& e) {
 
 bool KinoReplanFSM::callKinodynamicReplan() {
 
+  const ros::WallTime replanning_begin = ros::WallTime::now();
+
   planner_manager_->TopoPathReplan(start_pt_, end_pt_, start_yaw_, start_change_);
   if (!use_kino_replan_)
   {
@@ -404,6 +406,8 @@ bool KinoReplanFSM::callKinodynamicReplan() {
     //   waypoint_pub_.publish(wp_msg);    
     // }
 
+    ROS_DEBUG_STREAM("[IncrementalTopo] total_replanning_time="
+                     << (ros::WallTime::now() - replanning_begin).toSec() * 1000.0 << "ms");
     return true;
   }
 
@@ -471,10 +475,14 @@ bool KinoReplanFSM::callKinodynamicReplan() {
     // visualization_->drawTopoSampleArea(plan_data->topo_sample_area_, 0.05, Eigen::Vector4d(0.5, 0.5, 0.5, 0.5));
     visualization_->drawPerceptionInfo(plan_data->block_pts_, 0.3);
 
+    ROS_DEBUG_STREAM("[IncrementalTopo] total_replanning_time="
+                     << (ros::WallTime::now() - replanning_begin).toSec() * 1000.0 << "ms");
     return true;
 
   } else {
     cout << "generate new traj fail." << endl;
+    ROS_DEBUG_STREAM("[IncrementalTopo] total_replanning_time="
+                     << (ros::WallTime::now() - replanning_begin).toSec() * 1000.0 << "ms");
     return false;
   }
 }

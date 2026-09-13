@@ -100,6 +100,11 @@
     <param name="voronoi_layer/voro_map_resolution" value="0.1" type="double"/>
     <param name="voronoi_layer/obs_clearance" value="$(arg clearance_all)" type="double"/>
     <param name="voronoi_layer/obs_clearance_high" value="4.0" type="double"/>
+    <param name="incremental_topo/update_radius" value="2.0" type="double"/>
+    <param name="incremental_topo/map_change_history_size" value="64" type="int"/>
+    <param name="incremental_topo/patch_halo" value="1.0" type="double"/>
+    <param name="incremental_topo/max_patch_expansions" value="3" type="int"/>
+    <param name="incremental_topo/max_patch_fraction" value="0.35" type="double"/>
 
   <!-- planner manager -->
     <param name="manager/FilePath" value="$(arg FilePath)" type="string"/>

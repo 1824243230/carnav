@@ -46,6 +46,7 @@ namespace fast_planner {
 
 class TopoPath {
 public:
+  enum PATH_STATE { VALID = 0, AFFECTED = 1, INVALID = 2 };
   std::vector<Eigen::Vector3d> path;
   double length = std::numeric_limits<double>::max();
   double risk = 0.0;
@@ -55,6 +56,10 @@ public:
   bool safty = true;
   std::pair<vector<Eigen::Vector3d>, vector<Eigen::Vector3d>> path_break = {}; // first是从起点到断点的路径，second是从断点到终点的路径
   bool selected = false; // 是否是当前正被选中作为引导路径的，path container里面只允许一个true
+  PATH_STATE state = AFFECTED;
+  uint64_t validated_map_revision = 0;
+  uint64_t geometry_version = 0;
+  uint64_t path_id = 0;
 public:
   TopoPath(const std::vector<Eigen::Vector3d>& path_, double length_)
       : path(path_), length(length_), total_cost(length_) {}
@@ -298,6 +303,15 @@ private:
   std::vector<Eigen::Vector3d> start_change_;
   std::vector<Eigen::Vector3d> last_best_path_;
   bool last_success_ = true;
+  DynaVoro::MapChangeSet active_map_changes_;
+  uint64_t last_processed_map_revision_ = 0;
+  uint64_t next_path_id_ = 1;
+  size_t reused_history_paths_ = 0;
+  size_t invalidated_history_paths_ = 0;
+  size_t hec_check_count_ = 0;
+
+  bool pathIntersectsDirtyRegion(const std::vector<Eigen::Vector3d>& path,
+                                 const DynaVoro::MapChangeSet& changes) const;
 public:
   double clearance_;
   double clearance_line_;

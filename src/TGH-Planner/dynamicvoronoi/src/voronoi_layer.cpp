@@ -20,12 +20,26 @@ VoronoiLayer::VoronoiLayer(ros::NodeHandle& nh)
   // visualization_.reset(new fast_planner::PlanningVisualization(nh));
   clearance_low_thr_ = clearance_low_ * clearance_low_ / resolution_ / resolution_;
   clearance_high_thr_ = clearance_high_ * clearance_high_ / resolution_ / resolution_;
+  double update_radius;
+  nh.param("incremental_topo/update_radius", update_radius, 2.0);
+  double patch_halo, max_patch_fraction;
+  int max_patch_expansions;
+  nh.param("incremental_topo/patch_halo", patch_halo, 1.0);
+  nh.param("incremental_topo/max_patch_expansions", max_patch_expansions, 3);
+  nh.param("incremental_topo/max_patch_fraction", max_patch_fraction, 0.35);
+  int map_change_history_size;
+  nh.param("incremental_topo/map_change_history_size", map_change_history_size, 64);
+  map_change_history_size_ = static_cast<size_t>(std::max(1, map_change_history_size));
 
   gvg_ = std::make_shared<GVG>();
   gvg_->setClearanceThresholdSq(clearance_low_thr_, clearance_high_thr_);
   // gvg_->set_use_EGVG(false);
   gvg_planner_ = std::make_shared<gvg::Planner>();
   gvg_planner_->init(gvg_);
+  graph_manager_.reset(new IncrementalTopoGraphManager(
+      update_radius / resolution_,
+      static_cast<int>(std::ceil(patch_halo / resolution_)),
+      max_patch_expansions, max_patch_fraction));
 
   odometry_sub_ = nh.subscribe<nav_msgs::Odometry>("/car_odom", 1, &VoronoiLayer::odometryCallback, this);
   
@@ -99,11 +113,14 @@ void VoronoiLayer::outlineMap(unsigned char* costarr, int nx, int ny, unsigned c
   }
 }
 
-bool VoronoiLayer::update_by_occupancy_map(const std::vector<char>& occupancy_map, int map_size_x, int map_size_y)
+bool VoronoiLayer::update_by_occupancy_map(const std::vector<char>& occupancy_map, int map_size_x, int map_size_y,
+                                           int min_x, int min_y, int max_x, int max_y)
 {
   boost::unique_lock<boost::mutex> lock(mutex_);
   // std::cout << "map_size_x: " << map_size_x << ", map_size_y: " << map_size_y << std::endl;
-  if (last_size_x_ != map_size_x || last_size_y_ != map_size_y)
+  const bool resized = last_size_x_ != static_cast<unsigned int>(map_size_x) ||
+                       last_size_y_ != static_cast<unsigned int>(map_size_y);
+  if (resized)
   {
     voronoi_.initializeEmpty(map_size_x, map_size_y);
     for (unsigned int i = 0; i < map_size_x; ++i) {
@@ -117,13 +134,25 @@ bool VoronoiLayer::update_by_occupancy_map(const std::vector<char>& occupancy_ma
     last_size_x_ = map_size_x;
     last_size_y_ = map_size_y;
     esdf_data_.resize(last_size_x_ * last_size_y_, 1000.0);
+    last_occupancy_map_.assign(last_size_x_ * last_size_y_, -1);
   }
   std::vector<IntPoint> new_free_cells, new_occupied_cells;
-  for (unsigned int i = 1; i < last_size_x_ - 2; ++i)
+  const int scan_min_x = resized || min_x < 0 ? 1 : std::max(1, min_x);
+  const int scan_min_y = resized || min_y < 0 ? 1 : std::max(1, min_y);
+  const int scan_max_x = resized || max_x < 0 ? static_cast<int>(last_size_x_) - 3
+                                               : std::min(static_cast<int>(last_size_x_) - 3, max_x);
+  const int scan_max_y = resized || max_y < 0 ? static_cast<int>(last_size_y_) - 3
+                                               : std::min(static_cast<int>(last_size_y_) - 3, max_y);
+  MapChangeSet changes;
+  changes.full_map = resized;
+  changes.bounds = {scan_max_x, scan_max_y, scan_min_x, scan_min_y};
+  for (int i = scan_min_x; i <= scan_max_x; ++i)
   {  
-    for (unsigned int j = 1; j < last_size_y_ - 2; ++j)
+    for (int j = scan_min_y; j <= scan_max_y; ++j)
     {
       int index = j * last_size_x_ + i;
+      const char previous = last_occupancy_map_[index];
+      const char current = occupancy_map[index];
       if (voronoi_.isOccupied(i, j) && occupancy_map[index] != 1)
       {
         new_free_cells.emplace_back(i, j);
@@ -133,9 +162,20 @@ bool VoronoiLayer::update_by_occupancy_map(const std::vector<char>& occupancy_ma
       {
         new_occupied_cells.emplace_back(i, j);
       }
+      if (previous != current) {
+        changes.bounds.min_x = std::min(changes.bounds.min_x, i);
+        changes.bounds.min_y = std::min(changes.bounds.min_y, j);
+        changes.bounds.max_x = std::max(changes.bounds.max_x, i);
+        changes.bounds.max_y = std::max(changes.bounds.max_y, j);
+        if (previous == -1 && current == 0) changes.known_area_expanded = true;
+        last_occupancy_map_[index] = current;
+      }
     }
   }
-  if (new_free_cells.empty() && new_occupied_cells.empty())
+  changes.became_free = new_free_cells;
+  changes.became_occupied = new_occupied_cells;
+  if (new_free_cells.empty() && new_occupied_cells.empty() &&
+      !changes.known_area_expanded && !resized)
   {
     publishGVG(gvg_->getGraphs());
     publishVoronoiGrid();
@@ -168,8 +208,27 @@ bool VoronoiLayer::update_by_occupancy_map(const std::vector<char>& occupancy_ma
   gvd_runtime = timer.print("Voronoi Update");    
   #endif
   timer.reset();
-  gvg_->createGraph(voronoi_);
-  gvg_updated_ = true;
+  changes.revision = ++map_revision_;
+  latest_map_changes_ = changes;
+  map_change_history_.push_back(changes);
+  while (map_change_history_.size() > map_change_history_size_) {
+    map_change_history_.pop_front();
+  }
+  gvg_updated_ = graph_manager_->update(voronoi_, gvg_, changes);
+  const auto& stats = graph_manager_->stats();
+  ROS_DEBUG_STREAM("[IncrementalTopo] graph_total_nodes=" << stats.graph_total_nodes
+                   << " graph_updated_nodes=" << stats.graph_updated_nodes
+                   << " graph_updated_edges=" << stats.graph_updated_edges
+                   << " full_rebuild_count=" << stats.full_rebuild_count
+                   << " local_repair_count=" << stats.local_repair_count
+                   << " frontier_expansion_count=" << stats.frontier_expansion_count
+                   << " local_roi_cells=" << stats.local_roi_cells
+                   << " patch_nodes=" << stats.patch_nodes
+                   << " merged_nodes=" << stats.merged_nodes
+                   << " deduplicated_nodes=" << stats.deduplicated_nodes
+                   << " graph_validation_fail_count=" << stats.graph_validation_fail_count
+                   << " fallback_reason=" << stats.fallback_reason
+                   << " incremental_update_time=" << stats.incremental_update_time_ms << "ms");
   #ifdef VERBOSE
   egvg_runtime = timer.print("GVG Create"); 
   #endif
@@ -179,6 +238,42 @@ bool VoronoiLayer::update_by_occupancy_map(const std::vector<char>& occupancy_ma
   publishVoronoiGrid();
   // publishDistanceCloud();
   return true;
+}
+
+MapChangeSet VoronoiLayer::getMapChangesSince(uint64_t revision) const
+{
+  MapChangeSet merged;
+  merged.revision = map_revision_;
+  if (revision >= map_revision_) return merged;
+
+  bool first = true;
+  // If the requested revision fell out of the bounded history, force a safe
+  // full validation instead of silently omitting an old dirty region.
+  if (map_change_history_.empty() || revision + 1 < map_change_history_.front().revision) {
+    merged.full_map = true;
+    return merged;
+  }
+  for (const auto& changes : map_change_history_) {
+    if (changes.revision <= revision) continue;
+    merged.full_map = merged.full_map || changes.full_map;
+    merged.known_area_expanded = merged.known_area_expanded || changes.known_area_expanded;
+    merged.became_occupied.insert(merged.became_occupied.end(),
+                                  changes.became_occupied.begin(), changes.became_occupied.end());
+    merged.became_free.insert(merged.became_free.end(),
+                              changes.became_free.begin(), changes.became_free.end());
+    if (changes.bounds.valid()) {
+      if (first) {
+        merged.bounds = changes.bounds;
+        first = false;
+      } else {
+        merged.bounds.min_x = std::min(merged.bounds.min_x, changes.bounds.min_x);
+        merged.bounds.min_y = std::min(merged.bounds.min_y, changes.bounds.min_y);
+        merged.bounds.max_x = std::max(merged.bounds.max_x, changes.bounds.max_x);
+        merged.bounds.max_y = std::max(merged.bounds.max_y, changes.bounds.max_y);
+      }
+    }
+  }
+  return merged;
 }
 
 void VoronoiLayer::publishRuntime(double gvd_runtime, double egvg_runtime)
