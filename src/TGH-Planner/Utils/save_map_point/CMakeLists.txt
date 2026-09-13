@@ -36,3 +36,24 @@ add_executable (pointcloud_accumulator src/pointcloud_accumulator.cpp )
 target_link_libraries(pointcloud_accumulator
   ${catkin_LIBRARIES}
   )
+
+# Keep the utility package usable from both devel/setup.bash and an installed
+# workspace.  Without these rules, catkin_make install omits its nodes and
+# launch files, causing roslaunch to report that map_save.launch is missing.
+install(TARGETS
+  save_map_point
+  egvg_vis
+  pointcloud_accumulator
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+catkin_install_python(PROGRAMS
+  src/egvg_vis.py
+  src/pub_map.py
+  src/pub_map_img.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(DIRECTORY launch map_point
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
