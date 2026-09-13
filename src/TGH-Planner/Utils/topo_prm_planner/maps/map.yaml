@@ -4,7 +4,8 @@
 image: MapSprase.png
 
 resolution: 0.1
-origin: [ 0.0, 0.0, 0.0 ]
+# The 120 m x 120 m image is centred on the planner's world frame.
+origin: [ -60.0, -60.0, 0.0 ]
 occupied_thresh: 0.1
 free_thresh: 0.05
 negate: 0

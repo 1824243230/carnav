@@ -12,13 +12,22 @@
   <!-- 在sim_pose = false时，-offset_gazebo_world_x = 小车在rviz下真正初始位置，在gazebo里面一定是原点 -->
   <!-- 在sim_pose = true时， init_x 就是小车在rviz下的真正初始位置，init_x + offset_gazebo_world_x = 小车在gazebo坐标系下的位置 -->
 
-  <arg name="init_x" value="-22.0"/>
-  <arg name="init_y" value="-2.0"/>
-  <arg name="init_phi" value="90.0"/>
+  <!--
+    MapSprase unknown-map preset.  The matching Gazebo world occupies roughly
+    [-10, 110] in both axes.  With a (50, 50) Gazebo offset it is represented
+    by the planner in the centred [-60, 60] x [-60, 60] map.
 
-  <arg name="offset_gazebo_world_x" value="20"/> 
-  <arg name="offset_gazebo_world_y" value="0"/>
-  <arg name="world_name" default="$(find gazebo_simulator)/world/scene_1.world" />
+    The PNG is deliberately not loaded into the planner: it is ground truth.
+    Obstacles are discovered online from the simulated lidar, so unexplored
+    cells remain unknown in /sdf_map/occupancy_2D.
+  -->
+  <arg name="init_x" default="-45.0"/>
+  <arg name="init_y" default="0.0"/>
+  <arg name="init_phi" default="0.0"/>
+
+  <arg name="offset_gazebo_world_x" default="50.0"/>
+  <arg name="offset_gazebo_world_y" default="50.0"/>
+  <arg name="world_name" default="$(find gazebo_simulator)/world/scene_sprase.world" />
 
   <!--这个odom是仿真的-->
   <arg name="robot_odom" value="/car_odom"/>
@@ -31,10 +40,10 @@
   <arg name="max_steering_angel" value="45.0"/>
   <arg name="wheel_base" value="0.5"/>
   <!-- size of map, change the size in x, y, z according to your application -->
-  <!-- scene_sprase是110*110，scene_6是100*100 -->
-  <arg name="map_size_x" value="100.0"/>
-  <arg name="map_size_y" value="100.0"/>
-  <arg name="map_size_z" value=" 2.5"/>
+  <!-- MapSprase.png: 1200 x 1200 pixels at 0.1 m/pixel = 120 x 120 m. -->
+  <arg name="map_size_x" default="120.0"/>
+  <arg name="map_size_y" default="120.0"/>
+  <arg name="map_size_z" default="2.5"/>
 
   <!-- 我原本是准备将depth 和 lidar 都放到一个建图框架里面去的，但是实现起来有点复杂 -->
   <!-- odom_topic是planner订阅用于规划 -->
