@@ -5,7 +5,7 @@
   </node>
   <node pkg="tf2_ros" type="static_transform_publisher" name="for_rviz" args="0 0 0 0 0 0 1 /world /map"/>
 
-  <!-- <node pkg="topo_prm_planner" type="topo_prm_planner" name="topo_prm_planner" output="screen">
+  <node pkg="topo_prm_planner" type="topo_prm_planner" name="topo_prm_planner" output="screen">
     <param name="topo_prm/sample_inflate_x" value="2.0" type="double"/>
     <param name="topo_prm/sample_inflate_y" value="2.0" type="double"/>
     <param name="topo_prm/sample_inflate_z" value="0.1" type="double"/>
@@ -21,6 +21,6 @@
     <param name="topo_prm/parallel_shortcut" value="true" type="bool"/>
 
     <param name="record_file_path" value="$(find topo_prm_planner)/data/record_data.txt" type="string"/>
-  </node> -->
+  </node>
 
 </launch>

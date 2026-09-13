@@ -18,7 +18,7 @@
 
   <arg name="offset_gazebo_world_x" value="20"/> 
   <arg name="offset_gazebo_world_y" value="0"/>
-  <arg name="world_name" default="$(find gazebo_simulator)/world/scene_6.world" />
+  <arg name="world_name" default="$(find gazebo_simulator)/world/scene_1.world" />
 
   <!--这个odom是仿真的-->
   <arg name="robot_odom" value="/car_odom"/>
